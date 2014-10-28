@@ -31,6 +31,7 @@ static char     Private_group[MAX_GROUP_NAME];
 static char     group[80];
 int             ret;
 int             sequence = 0;
+int             member_count = 0;
 
 membership_info memb_info;
 FILE            *file;
@@ -77,12 +78,20 @@ int main( int argc, char *argv[] )
 	ret = SP_join( Mbox, group );
 	if( ret < 0 ) SP_error( ret );
 
-	for(;;)
+	/** Wait for all Expected Processes to Join the Group**/
+	while(member_count < num_machines)
 	{
-		//If you are the sender
-			//Send_messages();
-			//Read_message();
+		Read_message();
 	}
+
+	/** Processes send bursts and receive packets by dealing with events **/
+	E_init();
+
+	E_attach_fd( 0, READ_FD, Send_message_burst, 0, NULL, LOW_PRIORITY);
+
+	E_attach_fd( Mbox, READ_FD, Read_message, 0, NULL, HIGH_PRIORITY);
+
+	E_handle_events();
 
 	return 1;
 
@@ -112,21 +121,23 @@ static void Usage(int argc, char *argv[])
 static void Read_message()
 {
 	/** Initialize locals **/
-	int   service_type;
-	char  sender[MAX_GROUP_NAME];
-	int   num_groups;
-	char  target_groups[MAX_MEMBERS][MAX_GROUP_NAME];
-	int16 mess_type;
-	int   endian_mismatch;
-	char  mess[MAX_MESSLEN];
+	int     service_type;
+	char    sender[MAX_GROUP_NAME];
+	int     num_groups;
+	char    target_groups[MAX_MEMBERS][MAX_GROUP_NAME];
+	int16   mess_type;
+	int     endian_mismatch;
+	char    mess[MAX_MESSLEN];
+	message received_mess;
 
 	/** Receive a message **/
 	ret = SP_receive( Mbox, &service_type, sender, 100, &num_groups, 
 		target_groups, &mess_type, &endian_mismatch, sizeof(mess), mess );
 
+	/** Check if it is a membership message**/
 	if( Is_membership_mess( service_type ) )
 	{
-		printf("\n222\n");
+		/** Get the new membership informations **/
 		ret = SP_get_memb_info( mess, service_type, &memb_info );
 		if( ret < 0 )
 		{
@@ -134,7 +145,21 @@ static void Read_message()
 			exit( 1 );
 		}
 
-		printf("\ngrp id is %d %d %d\n",memb_info.gid.id[0], memb_info.gid.id[1], memb_info.gid.id[2] ); 
+		printf("\ngrp id is %d %d %d\n",memb_info.gid.id[0], 
+			memb_info.gid.id[1], memb_info.gid.id[2] ); 
+	
+	/** Check if it is a regular message**/
+	}else if( Is_regular_mess( service_type ) )
+	{
+		mess = *((message *) mess);
+		if(mess.message_index > 0)
+		{
+			//Write_message(mess);
+		}else{
+			//The process which sent this message is finished sending
+			//Check if all processes are finished sending
+				//If true, terminate = 1
+		}
 	}
 }
 
