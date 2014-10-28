@@ -31,16 +31,17 @@ static char     Private_group[MAX_GROUP_NAME];
 static char     group[80];
 int             ret;
 int             sequence = 0;
-int             member_count = 0;
+int             num_groups = 0;
 
 membership_info memb_info;
 FILE            *file;
 
+char            *all_machines; //temporary measure to terminate
 
 /** Method Declarations **/
 static void Usage(int argc, char *argv[]);
 static void Read_message();
-static void Send_messages();
+static void Send_message_burst();
 void Write_message(message m);
 
 int main( int argc, char *argv[] )
@@ -62,6 +63,7 @@ int main( int argc, char *argv[] )
 
 	Usage( argc, argv );
 
+    all_machines = malloc(num_machines);//temmmmmppppporary
 	/** Set up timeout for Spread connection **/
 	test_timeout.sec = 5;
 	test_timeout.usec = 0;
@@ -79,20 +81,21 @@ int main( int argc, char *argv[] )
 	if( ret < 0 ) SP_error( ret );
 
 	/** Wait for all Expected Processes to Join the Group**/
-	while(member_count < num_machines)
+	while(num_groups < num_machines)
 	{
 		Read_message();
 	}
 
 	/** Processes send bursts and receive packets by dealing with events **/
-	E_init();
+	
+    E_init();
 
 	E_attach_fd( 0, READ_FD, Send_message_burst, 0, NULL, LOW_PRIORITY);
 
 	E_attach_fd( Mbox, READ_FD, Read_message, 0, NULL, HIGH_PRIORITY);
 
 	E_handle_events();
-
+    
 	return 1;
 
 }
@@ -123,7 +126,6 @@ static void Read_message()
 	/** Initialize locals **/
 	int     service_type;
 	char    sender[MAX_GROUP_NAME];
-	int     num_groups;
 	char    target_groups[MAX_MEMBERS][MAX_GROUP_NAME];
 	int16   mess_type;
 	int     endian_mismatch;
@@ -145,20 +147,38 @@ static void Read_message()
 			exit( 1 );
 		}
 
-		printf("\ngrp id is %d %d %d\n",memb_info.gid.id[0], 
-			memb_info.gid.id[1], memb_info.gid.id[2] ); 
-	
+		printf("\ngrp id is %d %d %d %d\n",memb_info.gid.id[0], 
+			memb_info.gid.id[1], memb_info.gid.id[2], num_groups ); 
+
 	/** Check if it is a regular message**/
 	}else if( Is_regular_mess( service_type ) )
 	{
-		mess = *((message *) mess);
-		if(mess.message_index > 0)
+		received_mess = *((message *) mess);
+		if(received_mess.message_index >= 0)
 		{
-			//Write_message(mess);
-		}else{
+            sequence++;
+			Write_message(received_mess);
+            if (sequence == num_messages) {
+                message *end_mess = malloc(sizeof(message));
+                end_mess->process_index = machine_index;
+                end_mess->message_index = -1;
+
+                SP_multicast( Mbox, AGREED_MESS, group, 1, MAX_MESSLEN,
+                    (char *) end_mess);
+            }
+		}else {
 			//The process which sent this message is finished sending
 			//Check if all processes are finished sending
 				//If true, terminate = 1
+
+            /**FIXME ALL HACKS HERE **/
+            all_machines[received_mess.process_index] = 1;
+            int i = 0;
+            while (all_machines[i] > 0)
+                i++;
+            if (i == num_machines)
+                exit(0);
+            /**FIXME ALL HACKS HERE **/
 		}
 	}
 }
@@ -167,19 +187,32 @@ static void Send_message_burst()
 {
 	message mess;
 
+    printf("\nI get here\n");
 	for(int i = 0; i < BURST_SIZE; i++)
 	{
-		/** Create new packet **/
-		mess.message_index = sequence++;
-		mess.process_index = machine_index;
-		mess.random_number = rand();
-		
-		/** Write the message locally **/
-		Write_message(mess);
-		
-		/** Send the message to the other processes **/
-		ret = SP_multicast( Mbox, AGREED_MESS, group, 1, MAX_MESSLEN, 
-			(char *) &mess);
+        if (sequence >= num_messages) {
+            message *end_mess = malloc(sizeof(message));
+            end_mess->process_index = machine_index;
+            end_mess->message_index = -1;
+
+            SP_multicast( Mbox, AGREED_MESS, group, 1, MAX_MESSLEN,
+                (char *) end_mess);
+            break;
+        } else {
+            /** Create new packet **/
+            mess.message_index = sequence++;
+            mess.process_index = machine_index;
+            mess.random_number = rand();
+            
+            /** Write the message locally **/
+            Write_message(mess);
+            
+            /** Send the message to the other processes **/
+            ret = SP_multicast( Mbox, AGREED_MESS, group, 1, MAX_MESSLEN, 
+                (char *) &mess);
+        }
+
+
 	}
 }
 
