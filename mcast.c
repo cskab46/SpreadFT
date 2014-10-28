@@ -32,6 +32,7 @@ static char     group[80];
 int             ret;
 int             sequence = 0;
 int             num_groups = 0;
+int             num_sent = 0;
 
 membership_info memb_info;
 FILE            *file;
@@ -40,7 +41,7 @@ char            *all_machines; //temporary measure to terminate
 
 /** Method Declarations **/
 static void Usage(int argc, char *argv[]);
-static void Read_message();
+static void Handle_messages();
 static void Send_message_burst();
 void Write_message(message m);
 
@@ -52,6 +53,9 @@ int main( int argc, char *argv[] )
 	/** Seed random number generator for future use **/
 	srand(time(NULL));
 
+	/** Check usage **/
+	Usage(argc, argv);
+
 	/** Open file for writing **/
 	char filename[NAME_LENGTH];
 	sprintf(filename, "%d", machine_index);
@@ -61,9 +65,9 @@ int main( int argc, char *argv[] )
 		exit(0);
 	}
 
-	Usage( argc, argv );
+	/** Set up array for ending logic **/
+    all_machines = malloc(num_machines);
 
-    all_machines = malloc(num_machines);//temmmmmppppporary
 	/** Set up timeout for Spread connection **/
 	test_timeout.sec = 5;
 	test_timeout.usec = 0;
@@ -83,17 +87,22 @@ int main( int argc, char *argv[] )
 	/** Wait for all Expected Processes to Join the Group**/
 	while(num_groups < num_machines)
 	{
-		Read_message();
+		Handle_messages();
 	}
+
+	if(machine_index == 1) {
+		Send_message_burst();
+	}
+
+	printf("\nRECEIVED ALL MEMBERS\n");
 
 	/** Processes send bursts and receive packets by dealing with events **/
 	
     E_init();
 
-	E_attach_fd( 0, READ_FD, Send_message_burst, 0, NULL, LOW_PRIORITY);
+	E_attach_fd( Mbox, READ_FD, Handle_messages, 0, NULL, HIGH_PRIORITY);
 
-	E_attach_fd( Mbox, READ_FD, Read_message, 0, NULL, HIGH_PRIORITY);
-
+	printf("\nAbout to handle events\n");
 	E_handle_events();
     
 	return 1;
@@ -121,8 +130,11 @@ static void Usage(int argc, char *argv[])
 	sprintf( group, "johned" );
 }
 
-static void Read_message()
+static void Handle_messages()
 {
+
+	printf("\nREADING\n");
+
 	/** Initialize locals **/
 	int     service_type;
 	char    sender[MAX_GROUP_NAME];
@@ -131,6 +143,11 @@ static void Read_message()
 	int     endian_mismatch;
 	char    mess[MAX_MESSLEN];
 	message received_mess;
+
+	printf("\nnum_groups: %d\n", num_groups);
+	if(num_groups == num_machines) {
+		Send_message_burst();
+	}
 
 	/** Receive a message **/
 	ret = SP_receive( Mbox, &service_type, sender, 100, &num_groups, 
@@ -147,8 +164,8 @@ static void Read_message()
 			exit( 1 );
 		}
 
-		printf("\ngrp id is %d %d %d %d\n",memb_info.gid.id[0], 
-			memb_info.gid.id[1], memb_info.gid.id[2], num_groups ); 
+		//printf("\ngrp id is %d %d %d %d\n",memb_info.gid.id[0], 
+		//	memb_info.gid.id[1], memb_info.gid.id[2], num_groups ); 
 
 	/** Check if it is a regular message**/
 	}else if( Is_regular_mess( service_type ) )
@@ -158,26 +175,23 @@ static void Read_message()
 		{
             sequence++;
 			Write_message(received_mess);
-            if (sequence == num_messages) {
-                message *end_mess = malloc(sizeof(message));
-                end_mess->process_index = machine_index;
-                end_mess->message_index = -1;
 
-                SP_multicast( Mbox, AGREED_MESS, group, 1, MAX_MESSLEN,
-                    (char *) end_mess);
-            }
-		}else {
+		}else{
 			//The process which sent this message is finished sending
 			//Check if all processes are finished sending
 				//If true, terminate = 1
-
+			printf("ENDING CONDITIONAL------\n");
             /**FIXME ALL HACKS HERE **/
-            all_machines[received_mess.process_index] = 1;
+            all_machines[received_mess.process_index-1] = 1;
             int i = 0;
             while (all_machines[i] > 0)
                 i++;
-            if (i == num_machines)
+			printf("\ni: %d\n", i);
+            if (i == num_machines) {
+				fclose(file);
+				E_exit_events();
                 exit(0);
+			}
             /**FIXME ALL HACKS HERE **/
 		}
 	}
@@ -185,12 +199,15 @@ static void Read_message()
 
 static void Send_message_burst()
 {
+
+	printf("\nSENDING\n");
+
 	message mess;
 
-    printf("\nI get here\n");
 	for(int i = 0; i < BURST_SIZE; i++)
 	{
-        if (sequence >= num_messages) {
+        if (num_sent >= num_messages) {
+			printf("\nDONE SENDING\n");
             message *end_mess = malloc(sizeof(message));
             end_mess->process_index = machine_index;
             end_mess->message_index = -1;
@@ -203,12 +220,11 @@ static void Send_message_burst()
             mess.message_index = sequence++;
             mess.process_index = machine_index;
             mess.random_number = rand();
-            
-            /** Write the message locally **/
-            Write_message(mess);
-            
+			num_sent++;
+			printf("\nnum sent: %d\n", num_sent);
+
             /** Send the message to the other processes **/
-            ret = SP_multicast( Mbox, AGREED_MESS, group, 1, MAX_MESSLEN, 
+            SP_multicast( Mbox, AGREED_MESS, group, 1, MAX_MESSLEN, 
                 (char *) &mess);
         }
 
