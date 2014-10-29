@@ -30,9 +30,9 @@ static mailbox  Mbox;
 static char     Private_group[MAX_GROUP_NAME];
 static char     group[80];
 int             ret;
-int             sequence = 0;
 int             num_groups = 0;
 int             num_sent = 0;
+int             connected = 0;
 
 membership_info memb_info;
 FILE            *file;
@@ -90,6 +90,8 @@ int main( int argc, char *argv[] )
 		Handle_messages();
 	}
 
+	connected = 1;
+
 	if(machine_index == 1) {
 		Send_message_burst();
 	}
@@ -144,36 +146,19 @@ static void Handle_messages()
 	char    mess[MAX_MESSLEN];
 	message received_mess;
 
-	printf("\nnum_groups: %d\n", num_groups);
-	if(num_groups == num_machines) {
+	//Deals with intial receive calls
+	if(connected) {
 		Send_message_burst();
 	}
 
 	/** Receive a message **/
-	ret = SP_receive( Mbox, &service_type, sender, 100, &num_groups, 
+	ret = SP_receive( Mbox, &service_type, sender, MAX_MEMBERS, &num_groups, 
 		target_groups, &mess_type, &endian_mismatch, sizeof(mess), mess );
 
-	/** Check if it is a membership message**/
-	if( Is_membership_mess( service_type ) )
-	{
-		/** Get the new membership informations **/
-		ret = SP_get_memb_info( mess, service_type, &memb_info );
-		if( ret < 0 )
-		{
-			SP_error( ret );
-			exit( 1 );
-		}
-
-		//printf("\ngrp id is %d %d %d %d\n",memb_info.gid.id[0], 
-		//	memb_info.gid.id[1], memb_info.gid.id[2], num_groups ); 
-
-	/** Check if it is a regular message**/
-	}else if( Is_regular_mess( service_type ) )
-	{
+	if( Is_regular_mess( service_type ) ) {
 		received_mess = *((message *) mess);
 		if(received_mess.message_index >= 0)
 		{
-            sequence++;
 			Write_message(received_mess);
 
 		}else{
@@ -217,18 +202,25 @@ static void Send_message_burst()
             break;
         } else {
             /** Create new packet **/
-            mess.message_index = sequence++;
+            mess.message_index = num_sent++;
             mess.process_index = machine_index;
             mess.random_number = rand();
-			num_sent++;
 			printf("\nnum sent: %d\n", num_sent);
 
             /** Send the message to the other processes **/
             SP_multicast( Mbox, AGREED_MESS, group, 1, MAX_MESSLEN, 
                 (char *) &mess);
         }
+	}
 
+	if (num_sent >= num_messages) {
+		printf("\nDONE SENDING\n");
+        message *end_mess = malloc(sizeof(message));
+        end_mess->process_index = machine_index;
+    	end_mess->message_index = -1;
 
+        SP_multicast( Mbox, AGREED_MESS, group, 1, MAX_MESSLEN,
+            (char *) end_mess);
 	}
 }
 
